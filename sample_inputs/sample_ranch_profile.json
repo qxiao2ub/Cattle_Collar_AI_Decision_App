@@ -1,0 +1,15 @@
+{
+  "location_name": "Example Ranch",
+  "owned_or_leased": "Owned",
+  "acres": 5000,
+  "head_cattle": 600,
+  "fence_miles": 42,
+  "repair_hours_per_month": 20,
+  "moving_hours_per_month": 18,
+  "labor_rate": 28,
+  "connectivity": {
+    "cell_available": true,
+    "tower_possible": true,
+    "satellite_available": true
+  }
+}
