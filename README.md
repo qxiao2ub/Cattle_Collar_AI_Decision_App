@@ -2,6 +2,12 @@
 
 This repository is a Streamlit-ready MVP for the cattle collar / virtual fencing decision-support app.
 
+## Project credits
+
+- **Author:** Sykes Lamensdorf
+- **Advisor:** Dr. Qingyang Xiao
+
+
 The app follows the provided product flow:
 
 1. Rancher enters structured data: acres, cattle, fence, and labor.

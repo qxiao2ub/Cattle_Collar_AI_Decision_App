@@ -71,8 +71,15 @@ st.title("Cattle Collar Switch-or-Stay AI App")
 st.caption(
     "Decision-support MVP for ranchers comparing analog physical fencing with GPS/virtual fencing collars."
 )
+st.markdown(
+    "**Author:** Sykes Lamensdorf  \n**Advisor:** Dr. Qingyang Xiao"
+)
 
 with st.sidebar:
+    st.markdown("### Project Credits")
+    st.markdown("**Author:** Sykes Lamensdorf")
+    st.markdown("**Advisor:** Dr. Qingyang Xiao")
+    st.divider()
     st.header("1. Ranch data")
     location_name = st.text_input("Ranch / scenario name", "Example Ranch")
     owned_or_leased = st.selectbox("Land status", ["Owned", "Leased", "Mixed"], index=0)
