@@ -1,56 +1,88 @@
-# Cattle Collar Switch-or-Stay AI App
+# Cattle Collar Switch-or-Stay AI Decision App
 
-This repository is a Streamlit-ready MVP for the cattle collar / virtual fencing decision-support app.
+A Streamlit-ready ranch decision-support application that helps a rancher decide whether to **Switch**, **Pilot**, or **Stay** with physical fencing after checking connectivity, costs, payback, uncertainty, and operational risk.
 
 ## Project credits
 
 - **Author:** Sykes Lamensdorf
 - **Advisor:** Dr. Qingyang Xiao
+- **License:** MIT
 
+## Live links
 
-The app follows the provided product flow:
+- GitHub target: https://github.com/qxiao2ub/Cattle_Collar_AI_Decision_App
+- Streamlit app: https://cattle-collar-ai-decision.streamlit.app/
 
-1. Rancher enters structured data: acres, cattle, fence, and labor.
-2. A conversation layer asks for missing ranch-specific details.
-3. A hard connectivity gate checks whether cell, tower, or satellite service can support collars.
-4. A processing layer runs transparent switch/stay math and optional API hooks.
-5. The app outputs charts, payback period, sensitivity analysis, an alarm system, and an exportable JSON report.
+## UI migration
 
-## Repository contents
+The supplied `cattle-collar-switch-or-stay-ai-source.zip` design was a React/Lovable-style frontend. This repository ports that visual language and interaction flow into native **Streamlit** so Streamlit Community Cloud can deploy the app directly from Python.
+
+The migrated experience includes:
+
+1. Ranch-oriented landing page with the **Switch-or-Stay** identity.
+2. Six-stage guided assessment and review workflow.
+3. Signal-first hard connectivity gate.
+4. Editable cell / tower / satellite cost assumptions.
+5. Hard-dollar switch/stay economics and payback explanation.
+6. Switch / Pilot / Stay recommendation framing.
+7. Cash-flow and annual-cost charts.
+8. ±25% one-at-a-time sensitivity analysis.
+9. 800-run Monte Carlo uncertainty simulation.
+10. Statistical alarm / watch-out system.
+11. Synthetic ML fence-cost estimator demonstration.
+12. Reinforcement-learning-style bandit simulation.
+13. Optional NASA POWER public-data hook.
+14. JSON report download.
+15. Author and advisor credits directly in the application.
+
+## Repository structure
 
 ```text
-cattle_collar_core.py                Core math, ML, RL, sensitivity, alarm functions
-streamlit_app.py                     Streamlit Community Cloud entry point
-requirements.txt                     Python dependencies
-assets/cattle_collar_app_flow.png    Provided architecture flow image
-notebooks/cattle_collar_ai_decision_pipeline.ipynb  Colab-ready notebook
-sample_inputs/sample_ranch_profile.json             Example input profile
-.streamlit/config.toml               Streamlit theme settings
+.
+├── streamlit_app.py
+├── cattle_collar_core.py
+├── requirements.txt
+├── LICENSE
+├── README.md
+├── UI_MIGRATION_NOTES.md
+├── .streamlit/
+│   └── config.toml
+├── assets/
+│   └── cattle_collar_app_flow.png
+├── notebooks/
+│   └── cattle_collar_ai_decision_pipeline.ipynb
+└── sample_inputs/
+    └── sample_ranch_profile.json
 ```
 
 ## Run locally
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-## Deploy on Streamlit Community Cloud
+## Deploy to Streamlit Community Cloud
 
-1. Create a new GitHub repository.
-2. Upload the contents of this zip file to the repository root.
-3. Go to Streamlit Community Cloud and create a new app.
-4. Choose the GitHub repo and set the main file path to:
+1. Create or open the GitHub repository `Cattle_Collar_AI_Decision_App`.
+2. Upload the **contents** of this repository zip to the repository root.
+3. In Streamlit Community Cloud, choose the GitHub repository.
+4. Set the main file path to:
 
 ```text
 streamlit_app.py
 ```
 
-5. No API keys are required for the MVP. The optional NASA POWER solar proxy uses a public endpoint and fails gracefully if network access is unavailable.
+5. Deploy. No API secret is required for the core MVP. The optional NASA POWER call uses a public endpoint and fails gracefully if it is unavailable.
 
-## Important MVP notes
+## Important modeling notes
 
-- The default collar, subscription, tower, labor, and cost-share numbers are editable starter assumptions, not verified vendor quotes.
-- The ML estimator is trained on synthetic data. Replace this with vetted NRCS, extension, vendor, and ranch-history data before operational use.
-- The RL module is a simulator to test recommendation learning. It does not autonomously operate fences or trade off animal welfare/safety constraints.
-- Soft benefits such as wildlife/conservation upside and grazing gains are shown separately from the headline ROI.
+- Starter collar, subscription, tower, and platform numbers are **editable demo assumptions**, not verified current vendor quotes.
+- The ML estimator trains on synthetic demonstration data and must be replaced with vetted NRCS, extension, vendor, and ranch-history data before operational use.
+- The RL module is an experimentation simulator; it does **not** autonomously control cattle, virtual fences, or animal-welfare decisions.
+- Optional conservation/wildlife and grazing-productivity benefits are labeled separately. The headline recommendation uses the core hard-dollar economics rather than silently relying on soft benefits.
+- Connectivity, cost-share eligibility, and vendor pricing should be independently verified for the specific ranch before a purchase decision.
+
+## License
+
+This project is released under the [MIT License](LICENSE).

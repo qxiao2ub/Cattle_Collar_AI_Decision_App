@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import math
-from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -10,383 +11,955 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from cattle_collar_core import (
-    COST_PARAMETER_TABLE,
-    DEFAULT_SYSTEM_PRESETS,
-    apply_system_preset,
     build_cash_flow_table,
     build_report,
     build_sensitivity_table,
     check_connectivity,
-    cluster_user_profiles,
     compute_switch_stay_economics,
     estimate_fence_repair_material,
-    example_ranch_inputs,
     fetch_nasa_power_solar_proxy,
-    generate_follow_up_questions,
     generate_user_profile_population,
-    get_preset,
     make_payback_explanation,
     monte_carlo_uncertainty,
-    normalize_system_type,
     safe_json_dumps,
     simulate_bandit_learning,
     statistics_alarm_system,
     train_fence_cost_model,
 )
 
-APP_DIR = Path(__file__).resolve().parent
-FLOW_IMAGE = APP_DIR / "assets" / "cattle_collar_app_flow.png"
+APP_TITLE = "Cattle Collar Switch-or-Stay AI"
+AUTHOR = "Sykes Lamensdorf"
+ADVISOR = "Dr. Qingyang Xiao"
+GITHUB_URL = "https://github.com/qxiao2ub/Cattle_Collar_AI_Decision_App"
+APP_URL = "https://cattle-collar-ai-decision.streamlit.app/"
+MC_DRAWS = 800
+
+# Defaults taken from the supplied ranch-oriented UI. They are editable demo
+# assumptions, not verified vendor quotes.
+PATH_PRESETS: Dict[str, Dict[str, float]] = {
+    "cell": {
+        "hardware_per_head": 279.0,
+        "subscription_per_head_month": 3.5,
+        "tower_upfront": 0.0,
+        "install_setup": 2500.0,
+        "tower_maintenance_year": 0.0,
+        "platform_fee_year": 1200.0,
+        "vf_management_hours_month": 6.0,
+        "training_hours": 40.0,
+        "replacement_rate_pct": 6.0,
+    },
+    "tower": {
+        "hardware_per_head": 249.0,
+        "subscription_per_head_month": 2.5,
+        "tower_upfront": 18000.0,
+        "install_setup": 4500.0,
+        "tower_maintenance_year": 1500.0,
+        "platform_fee_year": 1000.0,
+        "vf_management_hours_month": 8.0,
+        "training_hours": 48.0,
+        "replacement_rate_pct": 6.0,
+    },
+    "satellite": {
+        "hardware_per_head": 349.0,
+        "subscription_per_head_month": 6.0,
+        "tower_upfront": 0.0,
+        "install_setup": 3000.0,
+        "tower_maintenance_year": 0.0,
+        "platform_fee_year": 1500.0,
+        "vf_management_hours_month": 6.0,
+        "training_hours": 40.0,
+        "replacement_rate_pct": 7.0,
+    },
+}
+
+PATH_LABELS = {
+    "cell": "Cell collars",
+    "tower": "Ranch tower",
+    "satellite": "Satellite collars",
+}
+
+LAND_LABELS = {
+    "owned": "Owned",
+    "leased": "Leased",
+    "mixed": "Mixed",
+    "allotment": "Public allotment",
+}
+
+SECTIONS = [
+    "Ranch data",
+    "Current analog labor",
+    "Connectivity gate",
+    "Virtual-fence cost assumptions",
+    "Finance & optional upside",
+    "Review",
+]
 
 st.set_page_config(
-    page_title="Cattle Collar Switch-or-Stay AI",
+    page_title=APP_TITLE,
     page_icon="🐄",
     layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(
+    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Karla:wght@400;500;600;700&display=swap');
+
+:root {
+  --ranch-bg: #f6f1e7;
+  --ranch-card: #fffdf8;
+  --ranch-text: #40392f;
+  --ranch-muted: #786f63;
+  --ranch-green: #4c7958;
+  --ranch-green-dark: #315b3e;
+  --ranch-sand: #eee5d6;
+  --ranch-orange: #b87038;
+  --ranch-red: #9f4338;
+  --ranch-border: #ded2c1;
+}
+
+html, body, [class*="css"] { font-family: 'Karla', ui-sans-serif, system-ui, sans-serif; }
+.stApp { background: var(--ranch-bg); color: var(--ranch-text); }
+.block-container { max-width: 1120px; padding-top: 1.6rem; padding-bottom: 4rem; }
+h1, h2, h3, .ranch-display { font-family: 'Fraunces', Georgia, serif !important; letter-spacing: -0.015em; }
+
+/* Streamlit chrome */
+[data-testid="stHeader"] { background: rgba(246,241,231,0.86); }
+[data-testid="stToolbar"] { right: 1rem; }
+[data-testid="stSidebarCollapsedControl"] { color: var(--ranch-text); }
+
+.ranch-topbar {
+  border: 1px solid var(--ranch-border); background: rgba(255,253,248,.82);
+  border-radius: 18px; padding: 16px 20px; margin-bottom: 26px;
+  display: flex; justify-content: space-between; align-items: center; gap: 18px;
+}
+.ranch-kicker { color: var(--ranch-orange); font-size: .76rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+.ranch-title { font-family: 'Fraunces', Georgia, serif; color: var(--ranch-text); font-size: 1.85rem; line-height: 1.1; font-weight: 700; }
+.ranch-pill { border: 1px solid var(--ranch-border); background: #fffdf8; border-radius: 999px; padding: 7px 12px; color: var(--ranch-muted); font-size: .78rem; white-space: nowrap; }
+
+.hero-kicker { color: var(--ranch-orange); font-weight: 800; letter-spacing: .16em; text-transform: uppercase; font-size: .78rem; }
+.hero-title { font-family: 'Fraunces', Georgia, serif; font-size: clamp(2.45rem, 5vw, 4.3rem); line-height: 1.04; color: var(--ranch-text); margin: .45rem 0 1rem; font-weight: 700; }
+.hero-copy { font-size: 1.14rem; line-height: 1.62; color: var(--ranch-muted); max-width: 650px; }
+.small-muted { color: var(--ranch-muted); font-size: .86rem; }
+
+.check-card, .info-card, .credit-card, .verdict-card, .metric-card {
+  background: var(--ranch-card); border: 1px solid var(--ranch-border); border-radius: 18px;
+}
+.check-card { padding: 22px; box-shadow: 0 6px 20px rgba(67,54,40,.05); }
+.check-row { display: grid; grid-template-columns: 36px 1fr; gap: 12px; margin: 0 0 18px; }
+.check-row:last-child { margin-bottom: 0; }
+.check-icon { width: 30px; height: 30px; border-radius: 50%; background: #e6efe8; color: var(--ranch-green-dark); display:flex; align-items:center; justify-content:center; font-weight:800; }
+.check-title { font-family: 'Fraunces', Georgia, serif; font-weight: 700; font-size: 1.02rem; margin-bottom: 3px; }
+.check-copy { color: var(--ranch-muted); font-size: .88rem; line-height:1.45; }
+
+.metric-card { padding: 18px; height: 100%; background: rgba(238,229,214,.44); }
+.metric-number { font-family: 'Fraunces', Georgia, serif; color: var(--ranch-green-dark); font-size: 2.1rem; font-weight: 700; line-height: 1; }
+.metric-label { font-weight: 700; margin-top: 6px; }
+.metric-copy { color: var(--ranch-muted); font-size: .84rem; margin-top: 4px; line-height:1.4; }
+
+.step-wrap { background: var(--ranch-card); border:1px solid var(--ranch-border); border-radius:18px; padding:14px 18px; margin-bottom:18px; }
+.step-head { display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:12px; }
+.step-label { font-weight:700; }
+.step-muted { color:var(--ranch-muted); font-size:.82rem; }
+.step-track { display:grid; grid-template-columns:repeat(6,1fr); gap:6px; }
+.step-seg { height:7px; border-radius:999px; background:#e4dacc; }
+.step-seg.done { background: var(--ranch-green); }
+.step-seg.current { background: var(--ranch-orange); }
+
+[data-testid="stVerticalBlockBorderWrapper"] {
+  background: var(--ranch-card); border-color: var(--ranch-border) !important; border-radius: 18px !important;
+  box-shadow: 0 5px 16px rgba(67,54,40,.035);
+}
+[data-testid="stMetric"] { background: rgba(238,229,214,.42); border: 1px solid var(--ranch-border); border-radius: 14px; padding: 12px 14px; }
+[data-testid="stMetricLabel"] { color: var(--ranch-muted); }
+[data-testid="stMetricValue"] { font-family:'Fraunces', Georgia, serif; color:var(--ranch-text); }
+
+.stButton > button, .stDownloadButton > button, .stLinkButton > a {
+  border-radius: 10px; min-height: 42px; font-weight: 700; border: 1px solid var(--ranch-border);
+}
+.stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] { background: var(--ranch-green); color: white; border-color: var(--ranch-green); }
+.stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover { background: var(--ranch-green-dark); border-color:var(--ranch-green-dark); }
+
+input, textarea, [data-baseweb="select"] > div { border-radius: 9px !important; }
+[data-testid="stAlert"] { border-radius: 12px; }
+
+.verdict-card { padding: 22px; border-left: 8px solid var(--ranch-green); }
+.verdict-card.pilot { border-left-color: var(--ranch-orange); }
+.verdict-card.stay, .verdict-card.blocked { border-left-color: var(--ranch-red); }
+.verdict-kicker { font-size:.76rem; color:var(--ranch-muted); text-transform:uppercase; font-weight:800; letter-spacing:.12em; }
+.verdict-title { font-family:'Fraunces', Georgia, serif; font-size:2.35rem; font-weight:700; margin:.2rem 0 .35rem; }
+.verdict-copy { color:var(--ranch-muted); line-height:1.55; }
+
+.note-box { padding: 12px 14px; border:1px solid var(--ranch-border); border-radius:10px; background:rgba(238,229,214,.38); color:var(--ranch-muted); font-size:.82rem; line-height:1.45; }
+.demo-badge { display:inline-block; border:1px solid #d49a63; color:#845023; background:#faecd9; padding:3px 8px; border-radius:999px; font-size:.66rem; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+.footer-box { margin-top: 36px; padding-top:18px; border-top:1px solid var(--ranch-border); color:var(--ranch-muted); font-size:.84rem; }
+.footer-box strong { color:var(--ranch-text); }
+
+@media (max-width: 700px) {
+  .ranch-topbar { align-items:flex-start; flex-direction:column; }
+  .ranch-pill { white-space:normal; }
+  .step-track { gap:3px; }
+}
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
 
 def money(value: float) -> str:
     if value is None or not math.isfinite(float(value)):
-        return "No payback"
-    return f"${float(value):,.0f}"
+        return "—"
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.0f}"
 
 
-def years(value: float) -> str:
-    if value is None or not math.isfinite(float(value)):
-        return "No finite payback"
-    return f"{float(value):.1f} years"
+def pct(value: float) -> str:
+    return f"{100.0 * float(value):.0f}%"
 
 
-@st.cache_resource(show_spinner=False)
-def cached_fence_model():
-    return train_fence_cost_model()
+def init_state() -> None:
+    defaults: Dict[str, Any] = {
+        "view": "home",
+        "step": 0,
+        "generated": False,
+        "result_tab": "The answer",
+        "ranch_name": "Home Place",
+        "land_status": "owned",
+        "acres": 4000.0,
+        "head_cattle": 300,
+        "fence_miles": 26.0,
+        "repair_hours_per_month": 18.0,
+        "moving_hours_per_month": 22.0,
+        "labor_rate": 28.0,
+        "fence_material_per_mile_year": 320.0,
+        "cell_coverage_pct": 55.0,
+        "tower_feasible": True,
+        "satellite_feasible": True,
+        "preferred_path": "cell",
+        "cost_share_pct": 0.0,
+        "fixed_grant": 0.0,
+        "discount_rate_pct": 8.0,
+        "horizon_years": 5,
+        "target_payback_years": 3.0,
+        "capital_available": 60000.0,
+        "conservation_upside_year": 0.0,
+        "grazing_upside_year": 0.0,
+        "latitude": 38.5,
+        "longitude": -106.0,
+        "advisor_output": "",
+        "advisor_title": "",
+    }
+    defaults.update(PATH_PRESETS["cell"])
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
-@st.cache_data(show_spinner=False)
-def cached_profiles():
-    df = generate_user_profile_population()
-    return cluster_user_profiles(df)
+def apply_path_preset() -> None:
+    path = st.session_state.preferred_path
+    for key, value in PATH_PRESETS[path].items():
+        st.session_state[key] = value
 
 
-st.title("Cattle Collar Switch-or-Stay AI App")
-st.caption(
-    "Decision-support MVP for ranchers comparing analog physical fencing with GPS/virtual fencing collars."
-)
-st.markdown(
-    "**Author:** Sykes Lamensdorf  \n**Advisor:** Dr. Qingyang Xiao"
-)
+def reset_results() -> None:
+    st.session_state.generated = False
+    st.session_state.result_tab = "The answer"
 
-with st.sidebar:
-    st.markdown("### Project Credits")
-    st.markdown("**Author:** Sykes Lamensdorf")
-    st.markdown("**Advisor:** Dr. Qingyang Xiao")
-    st.divider()
-    st.header("1. Ranch data")
-    location_name = st.text_input("Ranch / scenario name", "Example Ranch")
-    owned_or_leased = st.selectbox("Land status", ["Owned", "Leased", "Mixed"], index=0)
-    acres = st.number_input("Owned or managed acres", min_value=0.0, value=5000.0, step=100.0)
-    head_cattle = st.number_input("Head of cattle needing collars", min_value=0, value=600, step=10)
-    fence_miles = st.number_input("Miles of existing physical fence", min_value=0.0, value=42.0, step=1.0)
 
-    st.header("2. Current analog labor")
-    repair_hours = st.number_input("Fence repair hours per month", min_value=0.0, value=20.0, step=1.0)
-    moving_hours = st.number_input("Cattle-moving hours per month", min_value=0.0, value=18.0, step=1.0)
-    labor_rate = st.number_input("Loaded labor rate ($/hour)", min_value=0.0, value=28.0, step=1.0)
-    fence_material = st.number_input("Annual fence repair material ($/mile)", min_value=0.0, value=250.0, step=25.0)
+def start_assessment() -> None:
+    st.session_state.view = "assess"
+    st.session_state.step = 0
+    reset_results()
 
-    st.header("3. Connectivity gate")
-    cell_available = st.checkbox("Cell coverage works on useful pasture area", value=True)
-    tower_possible = st.checkbox("Ranch tower/base station is feasible", value=True)
-    satellite_available = st.checkbox("Satellite collar path is feasible", value=True)
-    preferred_label = st.selectbox(
-        "Preferred virtual-fence path",
-        ["Auto pick viable path"] + list(DEFAULT_SYSTEM_PRESETS.keys()),
-        index=0,
+
+def go_home() -> None:
+    st.session_state.view = "home"
+    reset_results()
+
+
+def build_inputs() -> Dict[str, Any]:
+    path = st.session_state.preferred_path
+    return {
+        "location_name": st.session_state.ranch_name,
+        "owned_or_leased": LAND_LABELS[st.session_state.land_status],
+        "acres": float(st.session_state.acres),
+        "head_cattle": int(st.session_state.head_cattle),
+        "fence_miles": float(st.session_state.fence_miles),
+        "repair_hours_per_month": float(st.session_state.repair_hours_per_month),
+        "moving_hours_per_month": float(st.session_state.moving_hours_per_month),
+        "labor_rate": float(st.session_state.labor_rate),
+        "fence_repair_material_per_mile_annual": float(st.session_state.fence_material_per_mile_year),
+        "virtual_labor_hours_per_month": float(st.session_state.vf_management_hours_month),
+        "collar_hardware_cost": float(st.session_state.hardware_per_head),
+        "subscription_per_head_month": float(st.session_state.subscription_per_head_month),
+        "ranch_platform_fee_annual": float(st.session_state.platform_fee_year),
+        "base_station_cost": float(st.session_state.tower_upfront) if path == "tower" else 0.0,
+        "install_cost": float(st.session_state.install_setup),
+        "training_hours": float(st.session_state.training_hours),
+        "collar_replacement_rate": float(st.session_state.replacement_rate_pct) / 100.0,
+        "tower_maintenance_annual": float(st.session_state.tower_maintenance_year) if path == "tower" else 0.0,
+        "cost_share_rate": float(st.session_state.cost_share_pct) / 100.0,
+        "fixed_cost_share": float(st.session_state.fixed_grant),
+        "discount_rate": float(st.session_state.discount_rate_pct) / 100.0,
+        "horizon_years": int(st.session_state.horizon_years),
+        "target_payback_years": float(st.session_state.target_payback_years),
+        "system_type": path,
+        "optional_conservation_value_annual": float(st.session_state.conservation_upside_year),
+        "optional_grazing_gain_annual": float(st.session_state.grazing_upside_year),
+        "capital_available": float(st.session_state.capital_available),
+        "cell_coverage_pct": float(st.session_state.cell_coverage_pct),
+    }
+
+
+def connectivity_result() -> Dict[str, Any]:
+    return check_connectivity(
+        cell_available=float(st.session_state.cell_coverage_pct) >= 40.0,
+        tower_possible=bool(st.session_state.tower_feasible),
+        satellite_available=bool(st.session_state.satellite_feasible),
+        preferred_path=st.session_state.preferred_path,
     )
-    preferred_path = "auto" if preferred_label.startswith("Auto") else normalize_system_type(preferred_label)
-    conn = check_connectivity(cell_available, tower_possible, satellite_available, preferred_path)
 
-    st.header("4. Virtual-fence cost assumptions")
-    system_for_defaults = conn["recommended_path"] or "cell"
-    if preferred_path not in {"auto", "stay"} and conn.get("preferred_viable", False):
-        system_for_defaults = preferred_path
-    preset = get_preset(system_for_defaults)
-    system_type = preset["system_type"]
-    st.caption(f"Editable defaults currently loaded for: {system_type}")
-    collar_cost = st.number_input("Collar hardware cost per head ($)", min_value=0.0, value=float(preset["collar_hardware_cost"]), step=25.0)
-    subscription = st.number_input("Subscription per head per month ($)", min_value=0.0, value=float(preset["subscription_per_head_month"]), step=1.0)
-    base_station = st.number_input("Base station / tower up-front cost ($)", min_value=0.0, value=float(preset["base_station_cost"]), step=500.0)
-    install_cost = st.number_input("Installation / setup cost ($)", min_value=0.0, value=float(preset["install_cost"]), step=500.0)
-    tower_maint = st.number_input("Tower or infrastructure annual maintenance ($)", min_value=0.0, value=float(preset["tower_maintenance_annual"]), step=100.0)
-    platform_fee = st.number_input("Extra ranch-level platform fee per year ($)", min_value=0.0, value=0.0, step=100.0)
-    virtual_labor = st.number_input("Virtual-fence management labor hours per month", min_value=0.0, value=5.0, step=1.0)
-    training_hours = st.number_input("Initial training / transition labor hours", min_value=0.0, value=24.0, step=2.0)
-    replacement_rate = st.slider("Annual collar replacement rate", min_value=0.0, max_value=0.5, value=0.08, step=0.01)
 
-    st.header("5. Finance and optional upside")
-    cost_share_rate = st.slider("Cost-share offset rate", min_value=0.0, max_value=0.95, value=0.35, step=0.01)
-    fixed_cost_share = st.number_input("Additional fixed cost-share/grant ($)", min_value=0.0, value=0.0, step=500.0)
-    discount_rate = st.slider("Discount rate", min_value=0.0, max_value=0.30, value=0.08, step=0.01)
-    horizon_years = st.slider("Analysis horizon (years)", min_value=1, max_value=20, value=7, step=1)
-    target_payback = st.slider("Target payback (years)", min_value=0.5, max_value=15.0, value=4.0, step=0.5)
-    capital_available = st.number_input("Available capital for switch ($)", min_value=0.0, value=250000.0, step=5000.0)
-    conservation_upside = st.number_input("Optional conservation/wildlife upside per year ($)", min_value=0.0, value=0.0, step=500.0)
-    grazing_upside = st.number_input("Optional grazing-productivity upside per year ($)", min_value=0.0, value=0.0, step=500.0)
+def connectivity_score(conn: Dict[str, Any]) -> int:
+    score = min(50.0, float(st.session_state.cell_coverage_pct) * 0.5)
+    score += 25.0 if st.session_state.tower_feasible else 0.0
+    score += 15.0 if st.session_state.satellite_feasible else 0.0
+    score += 10.0 if conn.get("preferred_viable", False) else 0.0
+    return int(round(max(0.0, min(100.0, score))))
 
-inputs = {
-    "location_name": location_name,
-    "owned_or_leased": owned_or_leased,
-    "acres": acres,
-    "head_cattle": int(head_cattle),
-    "fence_miles": fence_miles,
-    "repair_hours_per_month": repair_hours,
-    "moving_hours_per_month": moving_hours,
-    "labor_rate": labor_rate,
-    "fence_repair_material_per_mile_annual": fence_material,
-    "virtual_labor_hours_per_month": virtual_labor,
-    "collar_hardware_cost": collar_cost,
-    "subscription_per_head_month": subscription,
-    "ranch_platform_fee_annual": platform_fee,
-    "base_station_cost": base_station,
-    "install_cost": install_cost,
-    "training_hours": training_hours,
-    "collar_replacement_rate": replacement_rate,
-    "tower_maintenance_annual": tower_maint,
-    "cost_share_rate": cost_share_rate,
-    "fixed_cost_share": fixed_cost_share,
-    "discount_rate": discount_rate,
-    "horizon_years": horizon_years,
-    "target_payback_years": target_payback,
-    "system_type": system_type,
-    "optional_conservation_value_annual": conservation_upside,
-    "optional_grazing_gain_annual": grazing_upside,
-    "capital_available": capital_available,
-}
 
-if conn["viable"]:
+def compute_results() -> Dict[str, Any]:
+    inputs = build_inputs()
+    conn = connectivity_result()
+    chosen_path_passes = bool(conn.get("viable")) and bool(conn.get("preferred_viable"))
+    score = connectivity_score(conn)
+    if not chosen_path_passes:
+        return {
+            "inputs": inputs,
+            "connectivity": conn,
+            "score": score,
+            "gate_passes": False,
+            "economics": None,
+            "sensitivity": pd.DataFrame(),
+            "monte_carlo": pd.DataFrame(),
+            "alarms": statistics_alarm_system(inputs, connectivity=conn),
+        }
+
     econ = compute_switch_stay_economics(inputs)
-    sensitivity = build_sensitivity_table(inputs)
-    mc = monte_carlo_uncertainty(inputs, n=800, seed=7)
+    sensitivity = build_sensitivity_table(inputs, pct=0.25)
+    mc = monte_carlo_uncertainty(inputs, n=MC_DRAWS, seed=20260908)
     alarms = statistics_alarm_system(inputs, econ, conn, mc, sensitivity)
-else:
-    econ = None
-    sensitivity = pd.DataFrame()
-    mc = pd.DataFrame()
-    alarms = statistics_alarm_system(inputs, None, conn, None, None)
+    return {
+        "inputs": inputs,
+        "connectivity": conn,
+        "score": score,
+        "gate_passes": True,
+        "economics": econ,
+        "sensitivity": sensitivity,
+        "monte_carlo": mc,
+        "alarms": alarms,
+    }
 
-tabs = st.tabs(
-    [
-        "Flow",
-        "Inputs + LLM questions",
-        "Connectivity gate",
-        "Switch/stay math",
-        "Sensitivity + statistics",
-        "ML estimator",
-        "User groups",
-        "RL simulator",
-        "Alarms + export",
+
+def verdict_for(results: Dict[str, Any]) -> Tuple[str, str, str]:
+    if not results["gate_passes"]:
+        conn = results["connectivity"]
+        if conn.get("viable", False):
+            return (
+                "blocked",
+                "Chosen path is not viable",
+                f"The preferred {PATH_LABELS[st.session_state.preferred_path].lower()} path does not pass the connectivity gate. Choose the recommended fallback ({conn.get('recommended_path')}) before running the economics.",
+            )
+        return (
+            "blocked",
+            "No viable path today",
+            "Connectivity is the hard gate. With no workable cell, tower, or satellite path, the app intentionally skips the ROI math.",
+        )
+
+    econ = results["economics"]
+    mc = results["monte_carlo"]
+    prob_positive = float((mc["npv"] > 0).mean()) if len(mc) else 0.0
+    payback = float(econ["payback_years"])
+    payback_ok = math.isfinite(payback) and payback <= float(econ["target_payback_years"])
+    if float(econ["npv"]) > 0 and payback_ok and prob_positive >= 0.70:
+        return "switch", "Switch", "The hard-dollar case survives the target payback test and holds up across most simulated seasons. Plan a staged rollout and validate the signal map before full deployment."
+    if float(econ["npv"]) > 0 and prob_positive >= 0.45:
+        return "pilot", "Pilot first", "The economics are promising but still depend on assumptions that should be proven on your ranch. Collar one herd for a season, record the actual labor and replacement rates, then re-run the model."
+    return "stay", "Stay", "On today's hard-dollar assumptions, the collars do not create a strong enough risk-adjusted return. Keep the current system and revisit after pricing, cost-share, or labor conditions change."
+
+
+def render_topbar(show_back: bool = False) -> None:
+    st.markdown(
+        f"""
+<div class="ranch-topbar">
+  <div>
+    <div class="ranch-kicker">Switch-or-Stay</div>
+    <div class="ranch-title">Cattle Collar Decision</div>
+  </div>
+  <div class="ranch-pill">Author: <strong>{AUTHOR}</strong> &nbsp;•&nbsp; Advisor: <strong>{ADVISOR}</strong></div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    if show_back:
+        cols = st.columns([1, 5])
+        with cols[0]:
+            if st.button("← Home", use_container_width=True):
+                go_home()
+                st.rerun()
+
+
+def render_footer() -> None:
+    st.markdown(
+        f"""
+<div class="footer-box">
+  <strong>{APP_TITLE}</strong><br/>
+  Author: <strong>{AUTHOR}</strong> &nbsp;•&nbsp; Advisor: <strong>{ADVISOR}</strong><br/>
+  Open-source educational decision-support MVP under the MIT License. Ranch inputs are session-only in this implementation; no application database is included.<br/>
+  <a href="{GITHUB_URL}" target="_blank">GitHub repository</a> &nbsp;•&nbsp; <a href="{APP_URL}" target="_blank">Live app</a>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_home() -> None:
+    render_topbar()
+    left, right = st.columns([1.08, 0.92], gap="large", vertical_alignment="center")
+    with left:
+        st.markdown('<div class="hero-kicker">Ranch decision tool</div>', unsafe_allow_html=True)
+        st.markdown('<div class="hero-title">Should you collar the herd, or stay with what you know?</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="hero-copy">Walk through your ranch numbers and get a clear <strong>Switch, Pilot, or Stay</strong> answer — beginning with the hard question of whether your ground can actually support the required connectivity.</div>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+        if st.button("Start the ranch assessment  →", type="primary", use_container_width=True):
+            start_assessment()
+            st.rerun()
+        st.markdown('<div class="small-muted">No account required • session-only inputs • editable assumptions</div>', unsafe_allow_html=True)
+
+    with right:
+        st.markdown(
+            """
+<div class="check-card">
+  <div class="check-row"><div class="check-icon">✓</div><div><div class="check-title">Signal-first gate</div><div class="check-copy">No amount of savings matters if collars cannot communicate. The workflow stops cleanly when the selected path is not viable.</div></div></div>
+  <div class="check-row"><div class="check-icon">✓</div><div><div class="check-title">Your quotes, your numbers</div><div class="check-copy">Edit collar prices, subscriptions, base stations, labor, repair cost, cost-share, capital, and optional upside. Defaults are placeholders.</div></div></div>
+  <div class="check-row"><div class="check-icon">✓</div><div><div class="check-title">Risk you can see</div><div class="check-copy">Sensitivity sweeps, 800-run uncertainty simulation, cash-flow curves, ML estimates, RL experiments, and statistical alarms make the answer inspectable.</div></div></div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+    st.write("")
+    cards = st.columns(3, gap="medium")
+    card_data = [
+        ("6", "Guided stages", "From ranch profile and connectivity to review and results."),
+        ("800", "Simulated seasons", "Monte Carlo uncertainty around costs, labor, and cost-share assumptions."),
+        ("±25%", "Sensitivity sweep", "See which assumptions move the discounted value the most."),
     ]
-)
+    for col, (number, label, copy) in zip(cards, card_data):
+        with col:
+            st.markdown(f'<div class="metric-card"><div class="metric-number">{number}</div><div class="metric-label">{label}</div><div class="metric-copy">{copy}</div></div>', unsafe_allow_html=True)
 
-with tabs[0]:
-    st.subheader("Pipeline flow")
-    if FLOW_IMAGE.exists():
-        st.image(str(FLOW_IMAGE), use_container_width=True)
-    st.markdown(
-        """
-        **MVP architecture**
-
-        1. Rancher enters structured data: acres, cattle, fence, and labor.
-        2. A conversation layer asks for missing ranch-specific details.
-        3. A hard connectivity gate checks whether cell, tower, or satellite service can support collars.
-        4. The processing layer runs transparent switch/stay math and optional API hooks.
-        5. The output layer shows payback, charts, sensitivity, and a plain-English verdict.
-        """
-    )
-
-with tabs[1]:
-    st.subheader("Structured inputs")
-    st.dataframe(pd.DataFrame([inputs]).T.rename(columns={0: "value"}), use_container_width=True)
-    st.subheader("Conversation prompts to fill missing details")
-    for q in generate_follow_up_questions(inputs, conn):
-        st.write(f"- {q}")
-    st.subheader("Cost parameters and source basis")
-    st.dataframe(COST_PARAMETER_TABLE, use_container_width=True)
-
-with tabs[2]:
-    st.subheader("Connectivity hard gate")
-    if conn["viable"]:
-        st.success(conn["message"])
-        st.write("The app can proceed to switch/stay math using the selected or recommended path.")
-    else:
-        st.error(conn["message"])
-        st.write("Because collars cannot function without a workable connectivity path, the app skips the ROI math.")
-
-    with st.expander("Optional API hook: solar/climate proxy"):
-        lat = st.number_input("Latitude", value=38.5)
-        lon = st.number_input("Longitude", value=-106.0)
-        if st.button("Fetch NASA POWER solar proxy"):
-            solar = fetch_nasa_power_solar_proxy(lat, lon)
-            st.json(solar)
-
-with tabs[3]:
-    st.subheader("Switch/stay decision math")
-    if econ is None:
-        st.error("No viable connectivity path. Math is intentionally skipped.")
-    else:
-        rec = econ["recommendation_short"].upper()
-        if rec == "SWITCH":
-            st.success(econ["recommendation"])
-        elif rec == "BORDERLINE":
-            st.warning(econ["recommendation"])
-        else:
-            st.error(econ["recommendation"])
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Annual analog burden", money(econ["analog_annual_total"]))
-        m2.metric("Annual virtual cost", money(econ["virtual_annual_total"]))
-        m3.metric("Annual savings", money(econ["annual_savings"]))
-        m4.metric("Payback", years(econ["payback_years"]))
-        m5, m6, m7, m8 = st.columns(4)
-        m5.metric("Net up-front cost", money(econ["net_upfront"]))
-        m6.metric("NPV", money(econ["npv"]))
-        m7.metric("ROI multiple", "No upfront" if not math.isfinite(econ["roi_multiple"]) else f"{econ['roi_multiple']:.2f}x")
-        m8.metric("NPV incl. optional upside", money(econ["npv_with_optional"]))
-
-        st.info(make_payback_explanation(inputs, econ))
-
-        cost_df = pd.DataFrame(
-            [
-                {"category": "Analog repair labor", "annual_cost": econ["analog_repair_labor"]},
-                {"category": "Analog moving labor", "annual_cost": econ["analog_moving_labor"]},
-                {"category": "Analog repair material", "annual_cost": econ["analog_material"]},
-                {"category": "Virtual subscription", "annual_cost": econ["virtual_subscription"]},
-                {"category": "Virtual labor", "annual_cost": econ["virtual_labor"]},
-                {"category": "Collar replacement", "annual_cost": econ["collar_replacement"]},
-                {"category": "Tower maintenance", "annual_cost": econ["tower_maintenance"]},
-            ]
-        )
-        fig = px.bar(cost_df, x="category", y="annual_cost", title="Annual cost components")
-        fig.update_layout(xaxis_title="Cost category", yaxis_title="Annual dollars")
-        st.plotly_chart(fig, use_container_width=True)
-
-        cash = build_cash_flow_table(econ)
-        fig2 = px.line(
-            cash,
-            x="year",
-            y=["cumulative_undiscounted", "cumulative_discounted"],
-            markers=True,
-            title="Cumulative switch cash flow",
-        )
-        fig2.add_hline(y=0, line_dash="dash")
-        fig2.update_layout(xaxis_title="Year", yaxis_title="Cumulative dollars")
-        st.plotly_chart(fig2, use_container_width=True)
-        st.dataframe(cash, use_container_width=True)
-
-with tabs[4]:
-    st.subheader("Sensitivity and statistical credibility")
-    if econ is None:
-        st.warning("No sensitivity analysis because connectivity failed.")
-    else:
-        st.write("One-at-a-time sensitivity shows which inputs can change NPV most.")
-        st.dataframe(sensitivity, use_container_width=True)
-        fig = px.bar(
-            sensitivity.sort_values("npv_swing", ascending=True),
-            x="npv_swing",
-            y="parameter",
-            orientation="h",
-            title="Tornado-style NPV sensitivity",
-        )
-        fig.update_layout(xaxis_title="Maximum absolute NPV swing", yaxis_title="Parameter")
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.write("Monte Carlo uncertainty around key cost and labor assumptions.")
-        finite_mc = mc.replace([np.inf, -np.inf], np.nan).dropna(subset=["payback_years"])
+    st.write("")
+    with st.container(border=True):
+        st.markdown("### What the app evaluates")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Switch probability", f"{(mc['recommendation_short'] == 'switch').mean():.0%}")
-        c2.metric("Median NPV", money(mc["npv"].median()))
-        c3.metric("Median payback", years(finite_mc["payback_years"].median()) if not finite_mc.empty else "No finite payback")
-        fig_hist = px.histogram(mc, x="npv", nbins=40, title="Monte Carlo NPV distribution")
-        st.plotly_chart(fig_hist, use_container_width=True)
+        c1.markdown("**1. Ranch reality**\n\nAcres, head, physical fence, repair labor, cattle-moving labor, and ownership/lease status.")
+        c2.markdown("**2. Connectivity + economics**\n\nCell, tower, or satellite viability followed by transparent switch/stay cash-flow and payback math.")
+        c3.markdown("**3. AI + uncertainty**\n\nML cost estimation, RL learning simulation, sensitivity, Monte Carlo risk, and statistical alarms.")
 
-with tabs[5]:
-    st.subheader("ML estimator for fuzzy analog fence costs")
-    st.write(
-        "This MVP trains a random-forest model on synthetic training data. In production, replace the synthetic data with vetted NRCS practice-cost, extension-budget, vendor, and ranch-history data."
-    )
-    model, train_df, score = cached_fence_model()
-    col_a, col_b, col_c = st.columns(3)
-    region = col_a.selectbox("Region for estimate", sorted(train_df["region"].unique().tolist()))
-    terrain = col_b.selectbox("Terrain", sorted(train_df["terrain"].unique().tolist()))
-    use_ml = col_c.checkbox("Use ML estimate in what-if", value=False)
-    estimate = estimate_fence_repair_material(model, acres, fence_miles, labor_rate, region, terrain)
-    st.metric("Estimated annual fence repair material per mile", money(estimate))
-    st.caption(f"Training R^2 on synthetic data: {score:.2f}")
-    fig_ml = px.scatter(
-        train_df.sample(min(400, len(train_df)), random_state=1),
-        x="fence_miles",
-        y="fence_repair_material_per_mile_annual",
-        color="terrain",
-        title="Synthetic ML training data overview",
-    )
-    st.plotly_chart(fig_ml, use_container_width=True)
-    if use_ml and econ is not None:
-        ml_inputs = dict(inputs)
-        ml_inputs["fence_repair_material_per_mile_annual"] = estimate
-        ml_econ = compute_switch_stay_economics(ml_inputs)
-        st.info(f"With ML-estimated fence material, recommendation becomes: {ml_econ['recommendation']}")
+    render_footer()
 
-with tabs[6]:
-    st.subheader("Anonymous user/ranch grouping")
-    st.write(
-        "The brief envisions deep learning to group users. This MVP uses KMeans clustering as a transparent placeholder until enough anonymous real user data exists for a deeper model."
-    )
-    profiles, centers = cached_profiles()
-    st.dataframe(centers, use_container_width=True)
-    fig_cluster = px.scatter(
-        profiles,
-        x="acres",
-        y="head_cattle",
-        color="segment",
-        hover_data=["fence_miles", "repair_hours_per_month", "moving_hours_per_month"],
-        title="Synthetic anonymous rancher segments",
-    )
-    st.plotly_chart(fig_cluster, use_container_width=True)
 
-with tabs[7]:
-    st.subheader("Reinforcement-learning-style simulator")
-    st.write(
-        "This epsilon-greedy bandit learns which action has the highest simulated reward across perturbed ranch scenarios. It is a product-design simulator, not an autonomous operating policy."
-    )
-    if econ is None:
-        st.warning("No RL simulation because connectivity failed.")
-    else:
-        episodes = st.slider("Simulation episodes", min_value=100, max_value=2000, value=600, step=100)
-        history, q_df = simulate_bandit_learning(inputs, viable_paths=conn["viable_paths"], episodes=episodes)
-        st.dataframe(q_df, use_container_width=True)
-        fig_rl = px.line(history, x="episode", y="rolling_reward", title="RL simulator rolling reward")
-        st.plotly_chart(fig_rl, use_container_width=True)
-        fig_actions = px.histogram(history, x="action", title="Actions selected during exploration/exploitation")
-        st.plotly_chart(fig_actions, use_container_width=True)
-
-with tabs[8]:
-    st.subheader("Alarm system and export")
-    st.dataframe(alarms, use_container_width=True)
-    if econ is None:
-        st.error("No viable path: the export records the failed connectivity gate and no ROI math.")
-    report = build_report(inputs, conn, econ, alarms)
-    st.download_button(
-        "Download JSON report",
-        data=safe_json_dumps(report),
-        file_name="cattle_collar_switch_stay_report.json",
-        mime="application/json",
-    )
+def render_progress() -> None:
+    step = int(st.session_state.step)
+    segs = []
+    for i in range(len(SECTIONS)):
+        cls = "done" if i < step else "current" if i == step else ""
+        segs.append(f'<div class="step-seg {cls}"></div>')
     st.markdown(
-        """
-        **Responsible-use notes**
-
-        - The app is decision support, not a guarantee of profit or a substitute for ranch-specific professional advice.
-        - Soft benefits such as conservation or grazing gains remain optional upside and are not silently included in the headline ROI.
-        - Anonymous user data should be minimized, aggregated, and separated from personal identity before model training.
-        - Vendor pricing, public cost-share rules, and connectivity status should be refreshed before production use.
-        """
+        f"""
+<div class="step-wrap">
+  <div class="step-head"><div class="step-label">{'Review & edit' if step == 5 else f'Step {step + 1} of 5'} — {SECTIONS[step]}</div><div class="step-muted">Guided ranch assessment</div></div>
+  <div class="step-track">{''.join(segs)}</div>
+</div>
+""",
+        unsafe_allow_html=True,
     )
+
+
+def nav_buttons() -> None:
+    step = int(st.session_state.step)
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Back", disabled=step == 0, use_container_width=True):
+            st.session_state.step = max(0, step - 1)
+            st.rerun()
+    with c2:
+        label = "Review my answers" if step == 4 else "Next"
+        if st.button(label, type="primary", disabled=step >= 5, use_container_width=True):
+            st.session_state.step = min(5, step + 1)
+            st.rerun()
+
+
+def render_step_ranch() -> None:
+    with st.container(border=True):
+        st.markdown("## Ranch data")
+        st.caption("Rough numbers are fine. You can edit everything again before the model runs.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.text_input("Ranch / scenario name", key="ranch_name")
+            st.number_input("Owned or managed acres", min_value=0.0, step=50.0, key="acres")
+            st.number_input("Existing fence miles", min_value=0.0, step=1.0, key="fence_miles")
+        with c2:
+            st.radio("Land status", options=list(LAND_LABELS), format_func=lambda x: LAND_LABELS[x], horizontal=True, key="land_status")
+            st.number_input("Head needing collars", min_value=0, step=1, key="head_cattle")
+            st.info("These fields identify the ranch scale and the physical fencing burden the virtual-fence option must compete against.")
+    nav_buttons()
+
+
+def render_step_labor() -> None:
+    with st.container(border=True):
+        st.markdown("## Current analog labor")
+        st.caption("What the fence-and-horseback system costs today in time and repair material.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("Fence repair hours per month", min_value=0.0, step=1.0, key="repair_hours_per_month")
+            st.number_input("Loaded labor rate ($/hr)", min_value=0.0, step=1.0, key="labor_rate", help="Wage plus payroll costs, fuel, equipment, and other loaded labor burden.")
+        with c2:
+            st.number_input("Cattle-moving hours per month", min_value=0.0, step=1.0, key="moving_hours_per_month")
+            st.number_input("Annual repair material per mile ($/mile/year)", min_value=0.0, step=10.0, key="fence_material_per_mile_year")
+        st.markdown('<div class="note-box"><strong>Transparent arithmetic:</strong> the headline model compares the annual analog burden you enter against annual virtual-fence subscription, management, replacement, and infrastructure costs. Optional conservation and grazing upside remain separately labeled.</div>', unsafe_allow_html=True)
+    nav_buttons()
+
+
+def render_step_connectivity() -> None:
+    with st.container(border=True):
+        st.markdown("## Connectivity gate")
+        st.caption("This is the hard gate. If the selected collar path cannot communicate reliably, the app will not pretend the economics are actionable.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("Useful-pasture cell coverage (%)", min_value=0.0, max_value=100.0, step=5.0, key="cell_coverage_pct")
+            st.toggle("Ranch tower / base station feasible", key="tower_feasible")
+        with c2:
+            st.toggle("Satellite collar path feasible", key="satellite_feasible")
+            st.radio("Preferred virtual-fence path", list(PATH_LABELS), format_func=lambda x: PATH_LABELS[x], horizontal=True, key="preferred_path", on_change=apply_path_preset)
+        st.markdown('<div class="note-box">Cell is treated as viable when useful-pasture coverage is at least 40%. Choosing a path loads the attached UI\'s editable starter cost assumptions for that path.</div>', unsafe_allow_html=True)
+    nav_buttons()
+
+
+def render_step_costs() -> None:
+    with st.container(border=True):
+        st.markdown("## Virtual-fence cost assumptions")
+        st.caption("Replace these starter defaults with the quote in front of you. No value below should be treated as a current vendor price.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("Hardware per head ($)", min_value=0.0, step=10.0, key="hardware_per_head")
+            st.number_input("Tower upfront ($)", min_value=0.0, step=500.0, key="tower_upfront", help="Only included in the economics for the tower path.")
+            st.number_input("Tower annual maintenance ($/yr)", min_value=0.0, step=100.0, key="tower_maintenance_year")
+            st.number_input("Virtual-fence management labor (hrs/mo)", min_value=0.0, step=1.0, key="vf_management_hours_month")
+            st.number_input("Collar replacement rate (%/yr)", min_value=0.0, max_value=100.0, step=1.0, key="replacement_rate_pct")
+        with c2:
+            st.number_input("Subscription per head per month ($)", min_value=0.0, step=0.25, key="subscription_per_head_month")
+            st.number_input("Install & setup ($)", min_value=0.0, step=100.0, key="install_setup")
+            st.number_input("Ranch platform fee ($/yr)", min_value=0.0, step=100.0, key="platform_fee_year")
+            st.number_input("Initial training labor (hours)", min_value=0.0, step=1.0, key="training_hours")
+        if st.button("Reload defaults for selected path"):
+            apply_path_preset()
+            st.rerun()
+    nav_buttons()
+
+
+def render_step_finance() -> None:
+    with st.container(border=True):
+        st.markdown("## Finance and optional upside")
+        st.caption("Cost-share, grants, capital limits, and analysis horizon. Leave soft-benefit fields at zero if you do not want them shown.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("Cost-share rate (%)", min_value=0.0, max_value=95.0, step=5.0, key="cost_share_pct")
+            st.number_input("Discount rate (%)", min_value=0.0, max_value=50.0, step=0.5, key="discount_rate_pct")
+            st.number_input("Target payback (years)", min_value=0.5, max_value=30.0, step=0.5, key="target_payback_years")
+            st.number_input("Conservation / wildlife upside ($/yr)", min_value=0.0, step=500.0, key="conservation_upside_year")
+        with c2:
+            st.number_input("Fixed grant ($)", min_value=0.0, step=500.0, key="fixed_grant")
+            st.number_input("Analysis horizon (years)", min_value=2, max_value=15, step=1, key="horizon_years")
+            st.number_input("Capital available ($)", min_value=0.0, step=1000.0, key="capital_available")
+            st.number_input("Grazing-productivity upside ($/yr)", min_value=0.0, step=500.0, key="grazing_upside_year")
+        st.warning("Soft benefits are displayed as optional upside. The headline Switch / Pilot / Stay verdict uses the hard-dollar economics from the core model and does not silently rely on conservation or grazing benefits.")
+    nav_buttons()
+
+
+def render_review() -> None:
+    inputs = build_inputs()
+    conn = connectivity_result()
+    with st.container(border=True):
+        st.markdown("## Review & edit")
+        st.caption("Check the numbers before the connectivity gate and economics run.")
+        sections: List[Tuple[str, List[Tuple[str, str]]]] = [
+            ("1. Ranch data", [
+                ("Scenario", st.session_state.ranch_name),
+                ("Land status", LAND_LABELS[st.session_state.land_status]),
+                ("Acres", f"{st.session_state.acres:,.0f}"),
+                ("Head", f"{st.session_state.head_cattle:,}"),
+                ("Fence miles", f"{st.session_state.fence_miles:,.1f}"),
+            ]),
+            ("2. Current analog labor", [
+                ("Fence repair", f"{st.session_state.repair_hours_per_month:g} hrs/mo"),
+                ("Cattle moving", f"{st.session_state.moving_hours_per_month:g} hrs/mo"),
+                ("Loaded labor", f"{money(st.session_state.labor_rate)}/hr"),
+                ("Repair material", f"{money(st.session_state.fence_material_per_mile_year)}/mile/yr"),
+            ]),
+            ("3. Connectivity", [
+                ("Cell coverage", f"{st.session_state.cell_coverage_pct:g}%"),
+                ("Tower feasible", "Yes" if st.session_state.tower_feasible else "No"),
+                ("Satellite feasible", "Yes" if st.session_state.satellite_feasible else "No"),
+                ("Preferred path", PATH_LABELS[st.session_state.preferred_path]),
+                ("Current gate note", conn["message"]),
+            ]),
+            ("4. Virtual-fence costs", [
+                ("Hardware", f"{money(st.session_state.hardware_per_head)}/head"),
+                ("Subscription", f"{money(st.session_state.subscription_per_head_month)}/head/mo"),
+                ("Tower upfront", money(st.session_state.tower_upfront)),
+                ("Install & setup", money(st.session_state.install_setup)),
+                ("Platform fee", f"{money(st.session_state.platform_fee_year)}/yr"),
+                ("Management labor", f"{st.session_state.vf_management_hours_month:g} hrs/mo"),
+                ("Replacement", f"{st.session_state.replacement_rate_pct:g}%/yr"),
+            ]),
+            ("5. Finance", [
+                ("Cost share", f"{st.session_state.cost_share_pct:g}%"),
+                ("Fixed grant", money(st.session_state.fixed_grant)),
+                ("Discount rate", f"{st.session_state.discount_rate_pct:g}%"),
+                ("Horizon", f"{st.session_state.horizon_years} years"),
+                ("Payback target", f"{st.session_state.target_payback_years:g} years"),
+                ("Capital available", money(st.session_state.capital_available)),
+                ("Optional conservation", f"{money(st.session_state.conservation_upside_year)}/yr"),
+                ("Optional grazing", f"{money(st.session_state.grazing_upside_year)}/yr"),
+            ]),
+        ]
+        for title, rows in sections:
+            with st.expander(title, expanded=True):
+                df = pd.DataFrame(rows, columns=["Input", "Value"])
+                st.dataframe(df, hide_index=True, use_container_width=True)
+
+    with st.container(border=True):
+        st.markdown("### Ready when you are")
+        st.write("Generate the connectivity outcome, switch/stay economics, risk simulation, sensitivity, alarms, and AI analytics.")
+        if st.button("Generate my savings & connectivity outcome", type="primary", use_container_width=True):
+            st.session_state.generated = True
+            st.session_state.result_tab = "The answer"
+            st.rerun()
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Back", use_container_width=True):
+            st.session_state.step = 4
+            st.rerun()
+    with c2:
+        if st.button("Edit from the beginning", use_container_width=True):
+            st.session_state.step = 0
+            st.rerun()
+
+
+def render_blocked(results: Dict[str, Any]) -> None:
+    tone, title, summary = verdict_for(results)
+    st.markdown(f'<div class="verdict-card {tone}"><div class="verdict-kicker">Connectivity gate</div><div class="verdict-title">{title}</div><div class="verdict-copy">{summary}</div></div>', unsafe_allow_html=True)
+    st.write("")
+    with st.container(border=True):
+        st.markdown(f"### Connectivity score: {results['score']}/100")
+        st.progress(results["score"] / 100.0)
+        conn = results["connectivity"]
+        if not conn.get("viable"):
+            st.error(conn["message"])
+        elif not conn.get("preferred_viable"):
+            st.warning(conn["message"])
+            st.info(f"Recommended fallback: **{PATH_LABELS.get(conn.get('recommended_path'), conn.get('recommended_path'))}**. Go back to Connectivity and choose that path so the correct cost assumptions can be reviewed before calculation.")
+        st.markdown("**Next checks**")
+        st.markdown("- Ask carriers and collar vendors for a written map of usable coverage across grazing ground.\n- Price any repeater, tower, gateway, solar/power, and service costs.\n- Confirm a satellite option if the ranch lacks reliable terrestrial coverage.\n- Return to the connectivity step after the field facts are verified.")
+        if st.button("Edit connectivity answers", type="primary"):
+            st.session_state.generated = False
+            st.session_state.step = 2
+            st.rerun()
+
+
+def render_answer(results: Dict[str, Any]) -> None:
+    econ = results["economics"]
+    tone, title, summary = verdict_for(results)
+    st.markdown(f'<div class="verdict-card {tone}"><div class="verdict-kicker">Switch-or-Stay recommendation</div><div class="verdict-title">{title}</div><div class="verdict-copy">{summary}</div></div>', unsafe_allow_html=True)
+    st.write("")
+
+    with st.container(border=True):
+        st.markdown(f"### Connectivity gate: passed ({results['score']}/100)")
+        st.progress(results["score"] / 100.0)
+        st.caption(results["connectivity"]["message"])
+
+    cols = st.columns(5)
+    payback = float(econ["payback_years"])
+    cols[0].metric("Net upfront", money(econ["net_upfront"]))
+    cols[1].metric("Annual analog cost", money(econ["analog_annual_total"]))
+    cols[2].metric("Annual virtual cost", money(econ["virtual_annual_total"]))
+    cols[3].metric("Payback", f"{payback:.1f} yrs" if math.isfinite(payback) else "Not reached")
+    cols[4].metric(f"{econ['horizon_years']}-yr NPV", money(econ["npv"]))
+
+    with st.container(border=True):
+        st.markdown("### Where the annual cost goes")
+        compare = pd.DataFrame(
+            [
+                ["Analog", "Fence repair labor", econ["analog_repair_labor"]],
+                ["Analog", "Cattle-moving labor", econ["analog_moving_labor"]],
+                ["Analog", "Repair materials", econ["analog_material"]],
+                ["Virtual", "Subscription + platform", econ["virtual_subscription"]],
+                ["Virtual", "Management labor", econ["virtual_labor"]],
+                ["Virtual", "Collar replacement", econ["collar_replacement"]],
+                ["Virtual", "Tower maintenance", econ["tower_maintenance"]],
+            ],
+            columns=["System", "Cost component", "Annual cost"],
+        )
+        fig = px.bar(compare, x="System", y="Annual cost", color="Cost component", barmode="stack", text_auto=".2s")
+        fig.update_layout(legend_title_text="", yaxis_title="Annual cost ($)", xaxis_title="", margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown(f"**Hard-dollar annual savings:** {money(econ['annual_savings'])}")
+        st.caption("Optional conservation and grazing upside is not included in this headline savings figure.")
+
+    with st.container(border=True):
+        st.markdown("### Money in and out")
+        st.caption("The cumulative line crossing zero is the simple payback point; discounted cash flow is also shown.")
+        cash = build_cash_flow_table(econ)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=cash["year"], y=cash["cumulative_undiscounted"], mode="lines+markers", name="Cumulative cash"))
+        fig.add_trace(go.Scatter(x=cash["year"], y=cash["cumulative_discounted"], mode="lines+markers", name="Discounted cumulative"))
+        fig.add_hline(y=0, line_dash="dash")
+        fig.update_layout(xaxis_title="Year", yaxis_title="Cumulative value ($)", margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(cash.round(0), hide_index=True, use_container_width=True)
+
+    with st.container(border=True):
+        st.markdown("### Plain-language payback explanation")
+        st.write(make_payback_explanation(results["inputs"], econ))
+        if econ["optional_annual_upside"] > 0:
+            st.info(f"Optional labeled upside entered: {money(econ['optional_annual_upside'])}/year. NPV including that optional upside would be {money(econ['npv_with_optional'])}, versus the hard-dollar headline NPV of {money(econ['npv'])}.")
+
+
+def advisor_note(results: Dict[str, Any]) -> str:
+    econ = results["economics"]
+    tone, title, _ = verdict_for(results)
+    prob = float((results["monte_carlo"]["npv"] > 0).mean()) if len(results["monte_carlo"]) else 0.0
+    return (
+        f"Assessment for {st.session_state.ranch_name}: recommendation = {title}. "
+        f"Hard-dollar {econ['horizon_years']}-year NPV is {money(econ['npv'])}; simple payback is "
+        f"{f'{econ['payback_years']:.1f} years' if math.isfinite(float(econ['payback_years'])) else 'not reached'}; "
+        f"and {prob:.0%} of {MC_DRAWS} uncertainty runs finish with positive NPV. "
+        f"Connectivity score is {results['score']}/100 on the selected {PATH_LABELS[st.session_state.preferred_path].lower()} path. "
+        "Before purchase, verify actual pasture coverage, vendor quote terms, collar-loss/replacement policy, and any assumed cost-share in writing."
+    )
+
+
+def neighbor_benchmark() -> str:
+    pop = generate_user_profile_population(n=500, seed=13)
+    labor = pop["repair_hours_per_month"] + pop["moving_hours_per_month"]
+    user_labor = st.session_state.repair_hours_per_month + st.session_state.moving_hours_per_month
+    acres_pct = float((pop["acres"] <= st.session_state.acres).mean())
+    herd_pct = float((pop["head_cattle"] <= st.session_state.head_cattle).mean())
+    labor_pct = float((labor <= user_labor).mean())
+    return (
+        "Synthetic demo benchmark only — not a survey of neighboring ranches. "
+        f"Your acreage is around the {acres_pct:.0%} percentile of the generated demo population, herd size around the {herd_pct:.0%} percentile, "
+        f"and entered fence + cattle-moving labor around the {labor_pct:.0%} percentile. Use this only to test the future benchmarking workflow, not as market evidence."
+    )
+
+
+def vendor_questions() -> str:
+    path = PATH_LABELS[st.session_state.preferred_path]
+    return (
+        f"Questions for a {path.lower()} vendor: 1) What written coverage standard applies to my grazing ground? "
+        "2) What is included in the hardware and install quote? 3) Does the subscription escalate after year one? "
+        "4) What is the warranty and lost/damaged collar policy? 5) What is the expected annual replacement rate? "
+        "6) What happens during network/power outages? 7) What training period and physical backup containment do you recommend? "
+        "8) Can I export my herd/location data, and what is your data-retention policy?"
+    )
+
+
+@st.cache_resource
+def cached_fence_model():
+    return train_fence_cost_model(seed=42)
+
+
+def render_risk(results: Dict[str, Any]) -> None:
+    econ = results["economics"]
+    sensitivity = results["sensitivity"].copy()
+    mc = results["monte_carlo"].copy()
+
+    with st.container(border=True):
+        st.markdown("### What moves the answer")
+        st.caption("One input at a time is moved 25% down and up. Bars show the change from the base-case NPV.")
+        if not sensitivity.empty:
+            sensitivity["low_delta"] = sensitivity["low_npv"] - sensitivity["base_npv"]
+            sensitivity["high_delta"] = sensitivity["high_npv"] - sensitivity["base_npv"]
+            plot_df = sensitivity[["parameter", "low_delta", "high_delta"]].melt(id_vars="parameter", var_name="Scenario", value_name="NPV change")
+            plot_df["Scenario"] = plot_df["Scenario"].map({"low_delta": "25% lower", "high_delta": "25% higher"})
+            fig = px.bar(plot_df, y="parameter", x="NPV change", color="Scenario", barmode="group", orientation="h")
+            fig.add_vline(x=0, line_dash="dash")
+            fig.update_layout(yaxis_title="", margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+    with st.container(border=True):
+        st.markdown(f"### {MC_DRAWS} simulated seasons")
+        st.caption("The uncertainty engine varies key price, labor, material, and cost-share assumptions to show how fragile or robust the decision is.")
+        prob_positive = float((mc["npv"] > 0).mean())
+        q10, q50, q90 = np.quantile(mc["npv"].to_numpy(), [0.1, 0.5, 0.9])
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Comes out ahead", pct(prob_positive))
+        c2.metric("Unlucky (P10)", money(q10))
+        c3.metric("Middle (P50)", money(q50))
+        c4.metric("Lucky (P90)", money(q90))
+        fig = px.histogram(mc, x="npv", nbins=28, labels={"npv": "NPV ($)"})
+        fig.add_vline(x=0, line_dash="dash")
+        fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+        sorted_npv = np.sort(mc["npv"].to_numpy())
+        ecdf = pd.DataFrame({"Percentile": np.linspace(0, 100, len(sorted_npv)), "NPV": sorted_npv})
+        fig2 = px.line(ecdf, x="Percentile", y="NPV")
+        fig2.add_hline(y=0, line_dash="dash")
+        fig2.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig2, use_container_width=True)
+
+    with st.container(border=True):
+        st.markdown("### Watch-outs & statistical alarm system")
+        alarms = results["alarms"]
+        for _, row in alarms.iterrows():
+            sev = str(row["severity"]).lower()
+            text = f"**{str(row['severity']).upper()} — {row['alarm']}**  \n{row['recommended_action']}"
+            if sev == "high":
+                st.error(text)
+            elif sev == "medium":
+                st.warning(text)
+            elif sev == "low":
+                st.info(text)
+            else:
+                st.success(text)
+
+    with st.container(border=True):
+        st.markdown('### Advisor tools & AI lab <span class="demo-badge">Demo only</span>', unsafe_allow_html=True)
+        st.caption("These panels demonstrate the product roadmap. Synthetic ML/RL data is clearly labeled and should be replaced with vetted production data before operational use.")
+        b1, b2, b3 = st.columns(3)
+        if b1.button("Draft advisor note", use_container_width=True):
+            st.session_state.advisor_title = "Draft advisor note"
+            st.session_state.advisor_output = advisor_note(results)
+        if b2.button("Neighbor benchmark", use_container_width=True):
+            st.session_state.advisor_title = "Synthetic neighbor benchmark"
+            st.session_state.advisor_output = neighbor_benchmark()
+        if b3.button("Questions for vendor", use_container_width=True):
+            st.session_state.advisor_title = "Vendor diligence questions"
+            st.session_state.advisor_output = vendor_questions()
+        if st.session_state.advisor_output:
+            st.markdown(f"**{st.session_state.advisor_title}**")
+            st.info(st.session_state.advisor_output)
+
+        st.divider()
+        st.markdown("#### ML fence-cost estimator")
+        st.caption("Random-forest demo trained on synthetic regional/terrain examples. It estimates annual physical-fence repair material cost per mile.")
+        mc1, mc2 = st.columns(2)
+        region = mc1.selectbox("Region", ["Mountain West", "Great Plains", "Southwest", "Pacific", "Southeast"], key="ml_region")
+        terrain = mc2.selectbox("Terrain", ["flat", "rolling", "rough", "mountain"], key="ml_terrain")
+        if st.button("Run ML estimate"):
+            model, _, r2 = cached_fence_model()
+            estimate = estimate_fence_repair_material(model, st.session_state.acres, st.session_state.fence_miles, st.session_state.labor_rate, region, terrain)
+            st.success(f"Demo estimate: {money(estimate)} per fence mile per year. In-sample synthetic R²: {r2:.2f}.")
+            st.caption("Do not treat this synthetic model as a real NRCS/vendor quote. It exists to demonstrate the trainable ML module.")
+
+        st.divider()
+        st.markdown("#### Reinforcement-learning-style strategy simulator")
+        st.caption("Epsilon-greedy bandit demo. It learns which action performs best across perturbed synthetic ranch scenarios; it does not autonomously control fences.")
+        if st.button("Run RL simulation"):
+            history, q_df = simulate_bandit_learning(results["inputs"], results["connectivity"].get("viable_paths", []), episodes=600, epsilon=0.12, seed=22)
+            st.dataframe(q_df, hide_index=True, use_container_width=True)
+            fig = px.line(history, x="episode", y="rolling_reward", labels={"rolling_reward": "30-episode rolling reward"})
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.divider()
+        st.markdown("#### Optional live public-data hook")
+        st.caption("NASA POWER solar/climate context is optional and does not affect the headline verdict in this MVP.")
+        a1, a2 = st.columns(2)
+        a1.number_input("Latitude", min_value=-90.0, max_value=90.0, step=0.1, key="latitude")
+        a2.number_input("Longitude", min_value=-180.0, max_value=180.0, step=0.1, key="longitude")
+        if st.button("Fetch NASA POWER solar proxy"):
+            with st.spinner("Checking public climate data..."):
+                solar = fetch_nasa_power_solar_proxy(st.session_state.latitude, st.session_state.longitude)
+            if solar.get("ok"):
+                st.success(f"Annual-average solar proxy: {solar.get('annual_average_kwh_m2_day', 0):.2f} kWh/m²/day — source: {solar.get('source')}")
+            else:
+                st.warning(f"Public API was unavailable. The decision model still works without it. Details: {solar.get('error')}")
+
+    with st.container(border=True):
+        st.markdown("### Take it with you")
+        report = build_report(results["inputs"], results["connectivity"], econ, results["alarms"])
+        report["ui_migration"] = "Streamlit port of supplied Switch-or-Stay ranch UI"
+        report["author"] = AUTHOR
+        report["advisor"] = ADVISOR
+        report["connectivity_score"] = results["score"]
+        report["monte_carlo_summary"] = {
+            "draws": MC_DRAWS,
+            "probability_positive_npv": float((mc["npv"] > 0).mean()),
+            "p10_npv": float(np.quantile(mc["npv"], 0.10)),
+            "p50_npv": float(np.quantile(mc["npv"], 0.50)),
+            "p90_npv": float(np.quantile(mc["npv"], 0.90)),
+        }
+        st.download_button("Download results (JSON)", safe_json_dumps(report), file_name="cattle_collar_switch_or_stay_report.json", mime="application/json", type="primary")
+
+
+def render_results() -> None:
+    results = compute_results()
+    if not results["gate_passes"]:
+        render_blocked(results)
+        return
+
+    selection = st.segmented_control("Results", ["The answer", "Risk & next steps"], key="result_tab")
+    if selection == "Risk & next steps":
+        render_risk(results)
+    else:
+        render_answer(results)
+
+    st.write("")
+    c1, c2 = st.columns(2)
+    if c1.button("Back to inputs", use_container_width=True):
+        st.session_state.generated = False
+        st.session_state.step = 5
+        st.rerun()
+    if c2.button("Start a new assessment", type="primary", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        init_state()
+        st.session_state.view = "assess"
+        st.rerun()
+
+
+def render_assessment() -> None:
+    render_topbar(show_back=True)
+    if st.session_state.generated:
+        render_results()
+        render_footer()
+        return
+    render_progress()
+    step = int(st.session_state.step)
+    if step == 0:
+        render_step_ranch()
+    elif step == 1:
+        render_step_labor()
+    elif step == 2:
+        render_step_connectivity()
+    elif step == 3:
+        render_step_costs()
+    elif step == 4:
+        render_step_finance()
+    else:
+        render_review()
+    render_footer()
+
+
+init_state()
+if st.session_state.view == "home":
+    render_home()
+else:
+    render_assessment()

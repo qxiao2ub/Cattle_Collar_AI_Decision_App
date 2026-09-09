@@ -1,0 +1,5 @@
+entrypoint = "streamlit_app.py"
+framework = "streamlit"
+license = "MIT"
+author = "Sykes Lamensdorf"
+advisor = "Dr. Qingyang Xiao"
